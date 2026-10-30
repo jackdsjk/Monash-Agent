@@ -6,8 +6,35 @@ Cove 是一个本地优先的校园信息分诊应用：把 Gmail、Ed 和 Moodl
 
 - `webapp/`：Vite + React + TypeScript + Ant Design 前端；
 - `local-service/`：Node + Fastify + SQLite 本地服务，负责来源凭据、同步、分诊、资料索引和下载；
+- `desktop/`：Electron 桌面壳与打包配置（macOS / Windows）；
 - `docs/`：产品方向、设计、执行计划和 UI 审计；
 - `demo/`：匿名静态原型。
+
+## 桌面构建
+
+参见 [desktop/README.md](desktop/README.md)。构建结果与阻塞项见 [desktop-build-2026-10-30.md](docs/desktop-build-2026-10-30.md)。
+
+当前 macOS 包未签名，正式分发需要 Developer ID 和 notarization；Windows 包未在真实 Windows 机器测试。
+
+## MCP
+
+Cove 暴露一个本地只读 MCP 接口，外部 Agent 可以通过 stdio 或 Streamable HTTP 使用简报、截止时间、来源状态和课程资料。
+
+完整接入说明：[docs/mcp.md](docs/mcp.md)。
+
+快速配置：
+
+```json
+{
+  "mcpServers": {
+    "cove": {
+      "command": "node",
+      "args": ["/absolute/path/to/Monash Agent/local-service/dist/mcp-stdio.js"],
+      "env": { "COVE_API_URL": "http://127.0.0.1:4317" }
+    }
+  }
+}
+```
 
 ## 本地运行
 

@@ -96,6 +96,28 @@ Requires a stored Moodle session. Returns:
 
 Fetches Moodle course sections and weekly activity links, then replaces the local cache for that course.
 
+## Moodle downloads
+
+Individual downloads accept `name` so the saved file uses the Moodle resource title:
+
+```text
+GET /api/moodle/download?url=...&name=FIT1047%20Textbook%20(pdf%20version)
+Content-Disposition: attachment; filename*=UTF-8''FIT1047%20Textbook%20(pdf%20version).pdf
+```
+
+Batch downloads accept named items and an archive name:
+
+```json
+{
+  "archiveName": "FIT1047_S2_2026-Week-03.zip",
+  "items": [
+    { "url": "https://learning.monash.edu/mod/resource/view.php?id=...", "name": "Week 03 Activity" }
+  ]
+}
+```
+
+The archive contains files named from each resource title plus its real extension, not generic `cove-moodle-materials` names.
+
 ## GET /api/moodle/content?courseId=46337
 
 Returns cached weekly rows: `sectionNumber`, `sectionTitle`, `module`, `title`, `url`, `text`, `updatedAt`.
@@ -135,6 +157,14 @@ Marks items read and stores `last_checked_at`. Response `{ "ok": true, "lastChec
 ```
 
 Returns the updated item. `404` when missing; values are persisted in SQLite.
+
+## GET /api/setup/status
+
+Returns `gmailConnected`, `edConnected`, `moodleConnected`, `fullSyncCompleted`, `setupRequired`.
+
+## POST /api/setup/moodle/start
+
+Starts the local headed-Chrome login assistant. `GET /api/setup/moodle/status` returns `idle | waiting_login | connected | error | cancelled`; `POST /api/setup/moodle/cancel` closes it. On success the assistant captures `MoodleSession` into the local Keychain.
 
 ## POST /api/sync/full
 

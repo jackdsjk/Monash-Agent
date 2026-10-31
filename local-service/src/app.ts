@@ -16,6 +16,7 @@ import { syncEd, syncMoodle, syncMoodleForum } from "./sync/sources.js";
 import { syncAllMoodleContent } from "./sync/moodle-content.js";
 import { FullSyncJobs } from "./sync/jobs.js";
 import { MoodleClient } from "./sources/moodle.js";
+import { EdClient } from "./sources/ed.js";
 import { syncMoodleContent } from "./sync/moodle-content.js";
 import { downloadMoodleResource, MoodleDownloadError, safeDownloadName } from "./moodle-download.js";
 import type { ApiError, Source } from "./domain.js";
@@ -226,7 +227,35 @@ export function buildApp(options: AppOptions): FastifyInstance {
       if (raw) {
         try {
           const credentials = moodleCredentials.parse(JSON.parse(raw));
-          attendanceOcrCache = { at: Date.now(), codes: await scanMoodleAttendanceImages(credentials, moodleRows) };
+          // Attendance announcements often arrive as Gmail copies of a Moodle forum
+          // post whose code is an image. Feed those forum URLs into the same OCR path.
+          const forumRows = db.listAttendanceItems()
+            .filter((row) => row.source === "gmail")
+            .flatMap((row) => {
+              const forumUrl = /https:\/\/learning\.monash\.edu\/mod\/forum\/discuss\.php\?d=\d+/.exec(row.text)?.[0];
+              if (!forumUrl) return [];
+              const course = /^(.+?)\s+-\s+Announcements\s+-/i.exec(row.title)?.[1] ?? row.course;
+              return [{
+                id: `gmail-forum:${row.id}`,
+                courseId: "",
+                courseName: course || "Moodle",
+                sectionNumber: 0,
+                sectionTitle: row.title,
+                module: "forum",
+                title: row.title,
+                url: forumUrl,
+                text: row.text,
+                updatedAt: row.publishedAt,
+              }];
+            });
+          const seen = new Set<string>();
+          const ocrRows = [...moodleRows, ...forumRows].filter((row) => {
+            const key = `${row.courseName}:${row.url}:${row.title}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          attendanceOcrCache = { at: Date.now(), codes: await scanMoodleAttendanceImages(credentials, ocrRows) };
         } catch {
           attendanceOcrCache = { at: Date.now(), codes: [] };
         }
@@ -241,6 +270,38 @@ export function buildApp(options: AppOptions): FastifyInstance {
       preferences = { courses: [] };
     }
     return { codes: allCodes.filter((code) => matchesPreferredSession(preferences, code.course, code.session)) };
+  });
+
+  app.post<{ Body: { items?: Array<{ course?: string; week?: number; session?: string; code?: string }> } }>("/api/attendance/fill-all", async (request, reply) => {
+    const items = (request.body?.items ?? []).filter((item) => item && typeof item.course === "string" && typeof item.session === "string" && typeof item.code === "string" && Number.isInteger(item.week));
+    if (items.length === 0 || items.length > 50) {
+      return reply.code(400).send({ error: { code: "invalid_attendance", message: "Select between 1 and 50 attendance codes.", retryable: false } } satisfies ApiError);
+    }
+    const raw = await secrets.get("attendance-credentials");
+    if (!raw) return reply.code(409).send({ error: { code: "attendance_not_connected", message: "Attendance login is not configured.", retryable: false } } satisfies ApiError);
+    try {
+      const credentials = JSON.parse(raw) as AttendanceCredentials;
+      const valid = await validateAttendance(credentials);
+      if (!valid) return reply.code(409).send({ error: { code: "attendance_expired", message: "Attendance session expired; reconnect Attendance.", retryable: false } } satisfies ApiError);
+      const results = [];
+      let filled = 0;
+      let inactive = 0;
+      let notFound = 0;
+      for (const item of items) {
+        try {
+          const result = await fillAttendance({ course: item.course!, week: Number(item.week), session: item.session!, code: item.code! }, credentials);
+          if (result.status === "filled") filled += 1;
+          else if (result.status === "inactive") inactive += 1;
+          else notFound += 1;
+          results.push({ course: item.course, week: item.week, session: item.session, code: item.code, ...result });
+        } catch (error) {
+          results.push({ course: item.course, week: item.week, session: item.session, code: item.code, status: "error", message: error instanceof Error ? error.message : "fill failed" });
+        }
+      }
+      return { filled, inactive, notFound, results };
+    } catch (error) {
+      return reply.code(502).send({ error: { code: "attendance_fill_failed", message: error instanceof Error ? error.message : "Attendance fill failed.", retryable: true } } satisfies ApiError);
+    }
   });
 
   app.post<{ Body: { course?: string; week?: number; session?: string; code?: string } }>("/api/attendance/fill", async (request, reply) => {
@@ -275,6 +336,48 @@ export function buildApp(options: AppOptions): FastifyInstance {
       return reply.code(404).send({ error: { code: "not_found", message: "Item not found", retryable: false } } satisfies ApiError);
     }
     return item;
+  });
+
+  app.get<{ Params: { id: string } }>("/api/items/:id/detail", async (request, reply) => {
+    const item = db.getItem(request.params.id);
+    if (!item) return reply.code(404).send({ error: { code: "not_found", message: "Item not found", retryable: false } } satisfies ApiError);
+    const fallback = {
+      authorName: "",
+      authorRole: item.authorRole,
+      text: item.text,
+      replies: [],
+      url: item.url,
+      warning: "无法读取来源的实时回复，已显示本地缓存。",
+    };
+    try {
+      if (item.source === "ed") {
+        const raw = await secrets.get("ed-credentials");
+        if (!raw) return fallback;
+        const credentials = JSON.parse(raw) as { token: string; region: "us" | "au" | "eu" };
+        const threadId = Number(item.sourceItemId.replace(/^thread:/, ""));
+        if (!Number.isFinite(threadId)) return fallback;
+        const detail = await new EdClient(credentials.token, credentials.region, options.fetcher ?? fetch).getThreadDetail(threadId);
+        return { ...detail, url: item.url, warning: null };
+      }
+      if (item.source === "gmail") {
+        try {
+          const message = await (await google.client()).getMessage(item.sourceItemId);
+          return {
+            authorName: message.fromName,
+            authorRole: "unknown",
+            text: message.text,
+            replies: [],
+            url: item.url,
+            warning: null,
+          };
+        } catch {
+          return fallback;
+        }
+      }
+      return { ...fallback, warning: null };
+    } catch {
+      return fallback;
+    }
   });
 
   app.post("/api/check", async (request, reply) => {

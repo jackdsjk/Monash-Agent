@@ -1,4 +1,4 @@
-import type { AttendanceAssistantState, AttendanceCode, AttendancePreferences, AttendanceStatus, BriefItem, MoodleAssistantState, MoodleContentItem, MoodleCourse, RuntimeStatus, SetupStatus, SourceStatus, SyncStatus } from "../types";
+import type { AttendanceAssistantState, AttendanceCode, AttendancePreferences, AttendanceStatus, BriefItem, ItemSourceDetail, MoodleAssistantState, MoodleContentItem, MoodleCourse, RuntimeStatus, SetupStatus, SourceStatus, SyncStatus } from "../types";
 
 export interface BriefData {
   items: BriefItem[];
@@ -21,6 +21,10 @@ async function getJson<T>(path: string): Promise<T> {
 /** The UI contract is a list of normalized items; the service owns source access. */
 export async function fetchBrief(): Promise<BriefData> {
   return getJson<BriefData>("/brief");
+}
+
+export async function fetchItemDetail(id: string): Promise<ItemSourceDetail> {
+  return getJson<ItemSourceDetail>(`/items/${encodeURIComponent(id)}/detail`);
 }
 
 export async function fetchSources(): Promise<SourceStatus[]> {
@@ -84,6 +88,26 @@ export async function fillAttendanceCode(code: AttendanceCode): Promise<{ status
   const body = (await response.json().catch(() => null)) as { status?: "filled" | "inactive" | "not_found"; message?: string; error?: { message?: string } } | null;
   if (!response.ok || !body?.status) throw new Error(body?.error?.message ?? body?.message ?? `Attendance fill returned ${response.status}`);
   return { status: body.status, message: body.message ?? "" };
+}
+
+export interface AttendanceBulkResult {
+  filled: number;
+  inactive: number;
+  notFound: number;
+  results: Array<{ course?: string; week?: number; session?: string; code?: string; status: string; message?: string }>;
+}
+
+export async function fillAllAttendanceCodes(codes: AttendanceCode[]): Promise<AttendanceBulkResult> {
+  const response = await fetch("/api/attendance/fill-all", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      items: codes.map((code) => ({ course: code.course, week: code.week, session: code.session, code: code.code })),
+    }),
+  });
+  const body = (await response.json().catch(() => null)) as (AttendanceBulkResult & { error?: { message?: string } }) | null;
+  if (!response.ok || !body) throw new Error(body?.error?.message ?? `Attendance bulk fill returned ${response.status}`);
+  return body;
 }
 
 export async function fetchRuntimeStatus(): Promise<RuntimeStatus> {

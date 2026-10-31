@@ -7,7 +7,7 @@ Cove 是一个本地优先的校园信息分诊应用：把 Gmail、Ed 和 Moodl
 - `webapp/`：Vite + React + TypeScript + Ant Design 前端；
 - `local-service/`：Node + Fastify + SQLite 本地服务，负责来源凭据、同步、分诊、资料索引和下载；
 - `desktop/`：Electron 桌面壳与打包配置（macOS / Windows）；
-- `签到`：从 Gmail / Moodle 汇总 attendance code，Moodle 图片使用本地 OCR；
+- `签到`：从 Gmail / Moodle 汇总 attendance code，Moodle 图片使用内置 Tesseract.js / WASM OCR；
 - `docs/`：安装说明、MCP 接入和 release notes；
 - `demo/`：匿名静态原型。
 
@@ -19,7 +19,7 @@ Cove 是一个本地优先的校园信息分诊应用：把 Gmail、Ed 和 Moodl
 
 参见 [desktop/README.md](desktop/README.md)。
 
-当前 Electron macOS 包未签名，正式分发需要 Developer ID 和 notarization；测试可先用 `npm run build:launcher` 生成无需 Apple 签名的 CoveLauncher。Windows 包未在真实 Windows 机器测试。
+当前 Cove 0.1.1 的 Electron macOS 包未签名，正式分发需要 Developer ID 和 notarization；测试可先用 `npm run build:launcher` 生成无需 Apple 签名的 CoveLauncher。Windows 包未在真实 Windows 机器测试。
 
 ## MCP
 
